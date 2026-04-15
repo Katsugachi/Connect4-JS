@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Connect 4 | JS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #000000;
+    --gray-light: #f4f4f4;
+    --gray-border: #e0e0e0;
+  }
+
+  body {
+    font-family: 'IBM Plex Mono', monospace;
+    background-color: var(--bg);
+    color: var(--fg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0;
+    padding: 40px 20px;
+    user-select: none;
+  }
+
+  h1 {
+    font-weight: 600;
+    font-size: 2rem;
+    letter-spacing: -1px;
+    text-transform: uppercase;
+    margin: 0 0 10px 0;
+  }
+
+  #status {
+    font-size: 0.9rem;
+    height: 24px;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+  }
+
+  .controls {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  button {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 0.85rem;
+    background: var(--bg);
+    color: var(--fg);
+    border: 2px solid var(--fg);
+    padding: 10px 20px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.2s ease;
+  }
+
+  button:hover { background: var(--fg); color: var(--bg); }
+  button:disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none; }
+
+  .settings {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 30px;
+    padding: 15px 20px;
+    border: 2px solid var(--gray-border);
+    background: var(--bg);
+    width: 320px;
+    box-sizing: border-box;
+  }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  input[type=range] {
+    accent-color: var(--fg);
+    cursor: pointer;
+    flex-grow: 1;
+  }
+  
+  .stats-text {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--fg);
+    text-align: center;
+    margin-top: -4px;
+    margin-bottom: 4px;
+  }
+
+  .board-container {
+    position: relative;
+    padding: 10px;
+    border: 2px solid var(--fg);
+    background-color: var(--bg);
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(7, 50px);
+    grid-template-rows: repeat(6, 50px);
+    gap: 10px;
+  }
+
+  .cell {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: 2px solid var(--gray-border);
+    background-color: var(--bg);
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: background-color 0.1s, border-color 0.1s;
+  }
+
+  .cell.hover-col { background-color: var(--gray-light); border-color: #ccc; }
+  .cell.player { background-color: var(--fg); border-color: var(--fg); cursor: default; }
+  .cell.ai { background-color: transparent; border: 8px solid var(--fg); cursor: default; }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .cell.win { animation: blink 1s infinite; border-color: var(--fg); }
+</style>
+</head>
+<body>
+
+<h1>Connect 4</h1>
+<div id="status">CHOOSE YOUR TURN</div>
+
+<div class="controls">
+  <button id="btn-first" onclick="startGame(true)">Play First (●)</button>
+  <button id="btn-second" onclick="startGame(false)">Play Second (○)</button>
+</div>
+
+<div class="settings">
+  <div class="slider-row">
+    <label for="depth-slider" style="white-space: nowrap;">DEPTH: <span id="depth-val">11</span></label>
+    <input type="range" id="depth-slider" min="1" max="15" value="11">
+  </div>
+  <div class="stats-text" id="stats-text">Rating: 6993 | Time: ~1s</div>
+  <button onclick="applyDepth()" style="width: 100%;">APPLY SETTINGS</button>
+</div>
+
+<div class="board-container">
+  <div class="board" id="board"></div>
+</div>
+
+<script>
+  const ROWS = 6, COLS = 7;
+  const EMPTY = 0, PLAYER = 1, AI = 2;
+  const COL_ORDER = [3, 2, 4, 1, 5, 0, 6];
+
+  const HUMAN_PERCENTILES = [
+    0, 5, 20, 40, 60, 75, 85, 92, 96, 98.5, 99.5, 99.9, 99.95, 99.99, 99.995, 99.999
+  ];
+
+  const PLAY_TIMES = [
+    "", "< 1ms", "< 1ms", "< 1ms", "< 2ms", "< 5ms", "< 10ms", "~25ms", "~70ms", "~200ms", "~500ms", "~1s", "~3s", "~10s", "~20s", "35s+"
+  ];
+
+  let DEPTH = 11;
+  let board = new Int8Array(42); 
+  let heights = new Int8Array(7);
+  let gameOver = true;
+  let isPlayerTurn = false;
+  let winCells = [];
+
+  const boardEl = document.getElementById('board');
+  const statusEl = document.getElementById('status');
+  const btnFirst = document.getElementById('btn-first');
+  const btnSecond = document.getElementById('btn-second');
+  const depthSlider = document.getElementById('depth-slider');
+  const depthVal = document.getElementById('depth-val');
+  const statsText = document.getElementById('stats-text');
+
+  depthSlider.addEventListener('input', (e) => {
+    const val = parseInt(e.target.value, 10);
+    depthVal.textContent = val;
+    const pct = HUMAN_PERCENTILES[val];
+    const rating = Math.round((pct / 100) * 7000);
+    const time = PLAY_TIMES[val];
+    statsText.textContent = `Rating: ${rating} | Time: ${time}`;
+  });
+
+  function applyDepth() {
+    DEPTH = parseInt(depthSlider.value, 10);
+    updateStatus(`DEPTH SET TO ${DEPTH}`);
+    setTimeout(() => {
+      if (gameOver) updateStatus("CHOOSE YOUR TURN");
+      else if (isPlayerTurn) updateStatus("YOUR TURN (●)");
+      else updateStatus("THINKING...");
+    }, 1500);
+  }
+
+  const WIN_LINES = [];
+  for(let r=0; r<ROWS; r++) for(let c=0; c<COLS-3; c++) WIN_LINES.push([r*7+c, r*7+c+1, r*7+c+2, r*7+c+3]);
+  for(let c=0; c<COLS; c++) for(let r=0; r<ROWS-3; r++) WIN_LINES.push([r*7+c, (r+1)*7+c, (r+2)*7+c, (r+3)*7+c]);
+  for(let r=0; r<ROWS-3; r++) for(let c=0; c<COLS-3; c++) WIN_LINES.push([r*7+c, (r+1)*7+c+1, (r+2)*7+c+2, (r+3)*7+c+3]);
+  for(let r=3; r<ROWS; r++) for(let c=0; c<COLS-3; c++) WIN_LINES.push([r*7+c, (r-1)*7+c+1, (r-2)*7+c+2, (r-3)*7+c+3]);
+
+  const ZOBRIST = Array.from({length: 42}, () => [0, Math.random()*(1<<30)|0, Math.random()*(1<<30)|0]);
+  let currentHash = 0;
+  let tt = new Map();
+
+  function initEmptyBoard() {
+    board.fill(EMPTY);
+    heights.fill(0);
+    renderBoard();
+  }
+
+  function startGame(playerGoesFirst) {
+    board.fill(EMPTY);
+    heights.fill(0);
+    currentHash = 0;
+    tt.clear();
+    gameOver = false;
+    winCells = [];
+    isPlayerTurn = playerGoesFirst;
+    
+    btnFirst.disabled = true;
+    btnSecond.disabled = true;
+    renderBoard();
+
+    if (playerGoesFirst) {
+      updateStatus("YOUR TURN (●)");
+    } else {
+      updateStatus("THINKING...");
+      setTimeout(aiMove, 10);
+    }
+  }
+
+  function updateStatus(text) { statusEl.textContent = text; }
+
+  function renderBoard() {
+    boardEl.innerHTML = '';
+    for (let r = ROWS - 1; r >= 0; r--) {
+      for (let c = 0; c < COLS; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        const idx = r * 7 + c;
+        
+        if (board[idx] === PLAYER) cell.classList.add('player');
+        else if (board[idx] === AI) cell.classList.add('ai');
+        
+        if (winCells.includes(idx)) cell.classList.add('win');
+
+        if (!gameOver && board[idx] === EMPTY) {
+          cell.addEventListener('click', () => handleMove(c));
+          cell.addEventListener('mouseenter', () => highlightColumn(c, true));
+          cell.addEventListener('mouseleave', () => highlightColumn(c, false));
+        }
+        boardEl.appendChild(cell);
+      }
+    }
+  }
+
+  function highlightColumn(c, isHovering) {
+    if (gameOver || !isPlayerTurn) return;
+    const cells = boardEl.children;
+    for (let r = ROWS - 1; r >= 0; r--) {
+      const displayIdx = ((ROWS - 1 - r) * COLS) + c;
+      if (board[r * 7 + c] === EMPTY) {
+        if (isHovering) cells[displayIdx].classList.add('hover-col');
+        else cells[displayIdx].classList.remove('hover-col');
+      }
+    }
+  }
+
+  function makeMove(col, piece) {
+    const row = heights[col];
+    const idx = row * 7 + col;
+    board[idx] = piece;
+    heights[col]++;
+    currentHash ^= ZOBRIST[idx][piece];
+    return idx;
+  }
+
+  function undoMove(col, piece) {
+    heights[col]--;
+    const idx = heights[col] * 7 + col;
+    board[idx] = EMPTY;
+    currentHash ^= ZOBRIST[idx][piece];
+  }
+
+  function handleMove(col) {
+    if (gameOver || !isPlayerTurn || heights[col] === ROWS) return;
+
+    makeMove(col, PLAYER);
+    renderBoard();
+
+    const win = checkWin(PLAYER);
+    if (win) return endGame("YOU WIN", win);
+    if (heights.every(h => h === ROWS)) return endGame("DRAW", null);
+
+    isPlayerTurn = false;
+    updateStatus("THINKING...");
+    setTimeout(aiMove, 10); 
+  }
+
+  function aiMove() {
+    if (gameOver) return;
+
+    let bestScore = -Infinity;
+    let bestCol = 3;
+
+    tt.clear(); 
+    for (let col of COL_ORDER) {
+      if (heights[col] === ROWS) continue;
+      
+      makeMove(col, AI);
+      let score = minimax(DEPTH - 1, -Infinity, Infinity, false);
+      undoMove(col, AI);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestCol = col;
+      }
+    }
+
+    makeMove(bestCol, AI);
+    
+    const win = checkWin(AI);
+    if (win) {
+      renderBoard();
+      return endGame("YOU LOSE", win);
+    }
+    if (heights.every(h => h === ROWS)) {
+      renderBoard();
+      return endGame("DRAW", null);
+    }
+
+    isPlayerTurn = true;
+    updateStatus("YOUR TURN (●)");
+    renderBoard();
+  }
+
+  function endGame(msg, wData) {
+    gameOver = true;
+    if (wData) winCells = wData;
+    renderBoard();
+    updateStatus(msg);
+    
+    btnFirst.disabled = false;
+    btnSecond.disabled = false;
+    btnFirst.textContent = "PLAY AGAIN (1ST)";
+    btnSecond.textContent = "PLAY AGAIN (2ND)";
+  }
+
+  function minimax(depth, alpha, beta, isMaximizing) {
+    const ttEntry = tt.get(currentHash);
+    if (ttEntry && ttEntry.depth >= depth) return ttEntry.score;
+
+    if (checkWin(AI)) return 100000 + depth;
+    if (checkWin(PLAYER)) return -100000 - depth;
+    if (depth === 0 || heights.every(h => h === ROWS)) return evaluateBoard();
+
+    let bestEval = isMaximizing ? -Infinity : Infinity;
+
+    for (let col of COL_ORDER) {
+      if (heights[col] === ROWS) continue;
+
+      makeMove(col, isMaximizing ? AI : PLAYER);
+      let ev = minimax(depth - 1, alpha, beta, !isMaximizing);
+      undoMove(col, isMaximizing ? AI : PLAYER);
+
+      if (isMaximizing) {
+        bestEval = Math.max(bestEval, ev);
+        alpha = Math.max(alpha, ev);
+      } else {
+        bestEval = Math.min(bestEval, ev);
+        beta = Math.min(beta, ev);
+      }
+      if (beta <= alpha) break; 
+    }
+
+    tt.set(currentHash, { score: bestEval, depth: depth });
+    return bestEval;
+  }
+
+  function evaluateBoard() {
+    let score = 0;
+    
+    for (let line of WIN_LINES) {
+      let aiCnt = 0, pCount = 0;
+      for (let idx of line) {
+        if (board[idx] === AI) aiCnt++;
+        else if (board[idx] === PLAYER) pCount++;
+      }
+      if (aiCnt > 0 && pCount === 0) {
+        if (aiCnt === 3) score += 100;
+        else if (aiCnt === 2) score += 10;
+      } else if (pCount > 0 && aiCnt === 0) {
+        if (pCount === 3) score -= 100;
+        else if (pCount === 2) score -= 10;
+      }
+    }
+
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r * 7 + 3] === AI) score += 3;
+      else if (board[r * 7 + 3] === PLAYER) score -= 3;
+    }
+    return score;
+  }
+
+  function checkWin(piece) {
+    for (let line of WIN_LINES) {
+      if (board[line[0]] === piece && board[line[1]] === piece && 
+          board[line[2]] === piece && board[line[3]] === piece) {
+        return line;
+      }
+    }
+    return null;
+  }
+
+  initEmptyBoard();
+</script>
+</body>
+</html>
